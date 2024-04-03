@@ -1,18 +1,28 @@
+import asyncio
+
 import requests
-
-# response = requests.post('http://localhost:5000/posted/',
-#                          json={'title': 'this one', 'description': 'this one', 'owner': 'My'}
-#                          )
+import aiohttp
 
 
-# response = requests.get('http://localhost:5000/posted/15')
+async def main():
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url='http://127.0.0.1:5000/posted',
+                                json={'title': 'this two', 'description': 'this two', 'owner': 'not_my'}) as response:
+            print(response.status)
+            print(await response.text())
+
+        # async with session.get(url='http://127.0.0.1:5000/posted/1') as response:
+        #     print(response.status)
+        #     print(await response.text())
+
+        # async with session.patch(url='http://127.0.0.1:5000/posted/1',
+        #                          json={'description': 'test patch'}) as response:
+        #     print(response.status)
+        #     print(await response.text())
+
+        # async with session.delete(url='http://127.0.0.1:5000/posted/1') as response:
+        #     print(response.status)
+        #     print(await response.text())
 
 
-response = requests.patch('http://localhost:5000/posted/12', json={'description': 'test patch'})
-
-
-# response = requests.delete('http://localhost:5000/posted/14')
-
-
-print(response.text)
-print(response.status_code)
+asyncio.run(main())

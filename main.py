@@ -1,27 +1,25 @@
 from typing import Type
 
-import flask
-from flask import Flask, jsonify, request
-from flask.views import MethodView
+from aiohttp import web
+import json
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import ValidationError
 
-from models import Posted, Session
+from models import Posted, Session, engine, Base
 from schema import CreatePosted, UpdatePosted
 
-app = Flask('app')
+app = web.Application()
 
 
-@app.before_request
-def before_request():
-    session = Session()
-    request.session = session
+async def orm_context(app):
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+    await engine.dispose()
 
 
-@app.after_request
-def after_request(response: flask.Response):
-    request.session.close()
-    return response
+app.cleanup_ctx.append(orm_context)
 
 
 def valid_json(json_data: dict, schema_class: Type[CreatePosted] | Type[UpdatePosted]):
@@ -30,71 +28,80 @@ def valid_json(json_data: dict, schema_class: Type[CreatePosted] | Type[UpdatePo
     except ValidationError as er:
         error = er.errors()[0]
         error.pop('ctx', None)
-        raise HttpError(status_code=400, message=error)
+        raise web.json_response({'error': 'validation error'})
 
 
-class HttpError(Exception):
-    def __init__(self, status_code: int, message: str):
-        self.status_code = status_code
-        self.message = message
-
-
-@app.errorhandler(HttpError)
-def error_handler(error: HttpError):
-    response = jsonify({'error': error.message})
-    response.status_code = error.status_code
-    return response
-
-
-def get_posted(posted_id: int):
-    posted = request.session.query(Posted).get(posted_id)
+async def get_posted(session, posted_id: int):
+    posted = await session.get(Posted, posted_id)
     if posted is None:
-        raise HttpError(status_code=404, message='not found')
+        response = json.dumps({'error': f'posted with id {posted_id} not Found'})
+        raise web.HTTPNotFound(text=response, content_type='application/json')
     else:
         return posted
 
 
-def create_posted(posted: Posted):
+@web.middleware
+async def middleware(request, handler):
+    async with Session() as session:
+        request.session = session
+        response = await handler(request)
+        return response
+
+app.middlewares.append(middleware)
+
+
+async def create_posted(session, posted: Posted):
     try:
-        request.session.add(posted)
-        request.session.commit()
+        session.add(posted)
+        await session.commit()
     except IntegrityError:
-        raise HttpError(status_code=409, message='user already exist')
+        response = json.dumps({'error': f'posted already exist'})
+        raise web.HTTPNotFound(text=response, content_type='application/json')
 
 
-class PostedView(MethodView):
+class PostedView(web.View):
 
-    def post(self):
-        data_post = valid_json(request.json, CreatePosted)
+    @property
+    def posted_id(self):
+        return int(self.request.match_info['posted_id'])
+
+    @property
+    def session(self) -> AsyncSession:
+        return self.request.session
+
+    async def post(self):
+        json_data = await self.request.json()
+        data_post = valid_json(json_data, CreatePosted)
         posted = Posted(**data_post)
-        create_posted(posted)
-        return jsonify(posted.dict)
+        await create_posted(self.session, posted)
+        return web.json_response({'id': posted.id})
 
-    def get(self, posted_id: int):
-        posted = get_posted(posted_id)
-        return jsonify(posted.dict)
+    async def get(self):
+        posted = await get_posted(self.request.session, self.posted_id)
+        return web.json_response(posted.dict)
 
-    def patch(self, posted_id: int):
-        data_post = request.json
-        posted = get_posted(posted_id)
-        for field, value in data_post.items():
+    async def patch(self):
+        json_data = await self.request.json()
+        posted = await get_posted(self.request.session, self.posted_id)
+        for field, value in json_data.items():
             setattr(posted, field, value)
-        create_posted(posted)
-        return jsonify(posted.dict)
+        await create_posted(self.session, posted)
+        return web.json_response(posted.dict)
 
-    def delete(self, posted_id: int):
-        posted = get_posted(posted_id)
-        request.session.delete(posted)
-        request.session.commit()
-        return jsonify({'status': 'delete'})
-
-
-posted_view = PostedView.as_view('posted_view')
+    async def delete(self):
+        posted = await get_posted(self.request.session, self.posted_id)
+        await self.session.delete(posted)
+        await self.session.commit()
+        return web.json_response({'status': 'delete'})
 
 
-app.add_url_rule(rule='/posted/', view_func=posted_view, methods=['POST'])
+app.add_routes([
+    web.post('/posted', PostedView),
+    web.get('/posted/{posted_id:\d+}', PostedView),
+    web.patch('/posted/{posted_id:\d+}', PostedView),
+    web.delete('/posted/{posted_id:\d+}', PostedView),
+])
 
-app.add_url_rule(rule='/posted/<int:posted_id>', view_func=posted_view, methods=['GET', 'PATCH', 'DELETE'])
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    web.run_app(app, port=5000)

@@ -1,6 +1,6 @@
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
-from sqlalchemy import String, func, DateTime, create_engine
-import atexit
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import String, func, DateTime
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncAttrs
 import datetime
 import os
 from dotenv import load_dotenv
@@ -13,13 +13,12 @@ POSTGRES_HOST = os.getenv('POSTGRES_HOST')
 POSTGRES_PORT = os.getenv('POSTGRES_PORT')
 POSTGRES_DB_NAME = os.getenv('POSTGRES_DB_NAME')
 
-DNS = f'postgresql://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB_NAME}'
-engine = create_engine(DNS)
-Session = sessionmaker(bind=engine)
-atexit.register(engine.dispose)
+DNS = f'postgresql+asyncpg://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB_NAME}'
+engine = create_async_engine(DNS)
+Session = async_sessionmaker(bind=engine, expire_on_commit=False)
 
 
-class Base(DeclarativeBase):
+class Base(DeclarativeBase, AsyncAttrs):
     pass
 
 
@@ -37,9 +36,5 @@ class Posted(Base):
             'id': self.id,
             'title': self.title,
             'description': self.description,
-            'create_date': self.create_date,
             'owner': self.owner,
         }
-
-
-Base.metadata.create_all(bind=engine)
